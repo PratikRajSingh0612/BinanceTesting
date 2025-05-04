@@ -228,13 +228,268 @@ def allstrategies(df):
         'Rising Channel Midline Support Bounce': rising_channel_midline_support_bounce,
         'Price Reclaiming Previous Range High': price_reclaiming_previous_range_high,
         'Support Formed Above Previous Resistance': support_formed_above_previous_resistance,
-        'Low Volatility + Range Breakout': low_volatility_range_breakout,
+        'Low Volatility + Range Breakout': low_volatility_range_breakout
 
 
     }
 
     for name, func in strategies.items():
         df[name] = df.apply(func, axis=1)
+
+    return df
+
+def allstrategiesv2(df):
+    # ===== 1. Basic Price Transformations =====
+    df['Close_prev'] = df['Close'].shift(1)
+    df['Open_prev'] = df['Open'].shift(1)
+    df['High_prev'] = df['High'].shift(1)
+    df['Low_prev'] = df['Low'].shift(1)
+    df['Volume_prev'] = df['Volume'].shift(1)
+    
+    # Multi-period lookbacks
+    for i in range(2, 6):
+        df[f'Close_prev{i}'] = df['Close'].shift(i)
+        df[f'Open_prev{i}'] = df['Open'].shift(i)
+        df[f'High_prev{i}'] = df['High'].shift(i)
+        df[f'Low_prev{i}'] = df['Low'].shift(i)
+
+    # ===== 2. Moving Averages =====
+    ma_periods = [10, 20, 50, 200]
+    for period in ma_periods:
+        df[f'MA_{period}'] = df['Close'].rolling(period).mean()
+        df[f'EMA_{period}'] = ta.ema(df['Close'], length=period)
+        df[f'MA_{period}_prev'] = df[f'MA_{period}'].shift(1)
+        df[f'EMA_{period}_prev'] = df[f'EMA_{period}'].shift(1)
+
+    # Slope calculations
+    df['MA_50_slope'] = df['MA_50'].diff(5) / 5
+    df['MA_50_slope_prev'] = df['MA_50_slope'].shift(1)
+
+    # ===== 3. Volume Indicators =====
+    df['Volume_20_SMA'] = df['Volume'].rolling(20).mean()
+    df['OBV'] = ta.obv(df['Close'], df['Volume'])
+    df['OBV_prev'] = df['OBV'].shift(1)
+
+    # ===== 4. Oscillators =====
+    # RSI
+    df['RSI'] = ta.rsi(df['Close'], length=14)
+    df['RSI_prev'] = df['RSI'].shift(1)
+    df['RSI_prev2'] = df['RSI'].shift(2)
+    
+    # MACD
+    macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
+    df['MACD'] = macd['MACD_12_26_9']
+    df['MACD_Signal'] = macd['MACDs_12_26_9']
+    df['MACD_Histogram'] = macd['MACDh_12_26_9']
+    df['MACD_prev'] = df['MACD'].shift(1)
+    df['MACD_Signal_prev'] = df['MACD_Signal'].shift(1)
+    df['MACD_Histogram_prev'] = df['MACD_Histogram'].shift(1)
+
+    # Stochastic
+    df['StochRSI'] = ta.stochrsi(df['Close'])
+    df['StochRSI_prev'] = df['StochRSI'].shift(1)
+
+    # ADX
+    adx = ta.adx(df['High'], df['Low'], df['Close'])
+    df['ADX'] = adx['ADX_14']
+    df['DI+'] = adx['DMP_14']
+    df['DI-'] = adx['DMN_14']
+
+    # ===== 5. Support/Resistance =====
+    df['Support'] = df['Low'].rolling(20).min()
+    df['Resistance'] = df['High'].rolling(20).max()
+    df['Swing_High'] = df['High'].rolling(50).max()
+    df['Swing_Low'] = df['Low'].rolling(50).min()
+    df['Support_Tests'] = df['Low'].rolling(20).apply(lambda x: (x == x.min()).sum())
+
+    # ===== 6. Fibonacci Levels =====
+    df['Fib_382'] = df['Close'] * 0.382
+    df['Fib_50'] = df['Close'] * 0.5
+    df['Fib_618'] = df['Close'] * 0.618
+    df['Fib_786'] = df['Close'] * 0.786
+    df['Fib_Extension_1'] = df['Close'] * 1.618
+    df['Fib_Extension_2'] = df['Close'] * 2.618
+
+    # ===== 7. Candlestick Features =====
+    df['Candle_Body'] = abs(df['Close'] - df['Open'])
+    df['Upper_Wick'] = df['High'] - df[['Close','Open']].max(axis=1)
+    df['Lower_Wick'] = df[['Close','Open']].min(axis=1) - df['Low']
+    df['Is_Bullish'] = (df['Close'] > df['Open']).astype(int)
+    df['Is_Bearish'] = (df['Close'] < df['Open']).astype(int)
+    df['Is_Doji'] = (df['Candle_Body'] < 0.001 * df['Close']).astype(int)
+
+    # ===== 8. Apply All 138 Strategies =====
+    strategy_mapping = {
+    # ===== 1. Moving Average Strategies (10) =====
+    'GoldenCross': golden_cross,
+    'PriceBounce200EMA': price_bounces_off_200_ema,
+    'PriceCross20EMA': price_crosses_above_20_ema,
+    'EMA10Cross50': ema_10_crosses_above_50,
+    'PriceAboveAllMAs': price_above_all_major_mas,
+    'MARibbonCompression': ma_ribbon_compression,
+    'PriceRetestsMA': price_retests_ma,
+    'DeathCrossSignal': death_cross_avoidance,
+    'EMACrossoverHTF': ema_crossover_high_timeframe,
+    'MASlopeUpward': ma_slope_turning_upward,
+    
+    # ===== 2. Volume Strategies (10) =====
+    'VolumeSpikeGreen': volume_spike_green_candle,
+    'VolumeBreakout20SMA': volume_breakout_above_20_day_avg,
+    'BullishVolumeDivergence': bullish_price_volume_divergence,
+    'ClimaxVolumeReversal': climax_volume_reversal,
+    'VolumeSupportResistance': volume_supporting_resistance_breakout,
+    'VolumeRisingConsolidation': volume_rising_price_consolidates,
+    'AccumulationPattern': accumulation_volume_pattern,
+    'LowVolumePullback': low_volume_pullback_after_high_volume_rally,
+    'OBVRising': volume_rising_obv_rising,
+    'VolumeSupportBreakout': volume_support_prior_breakout_zone,
+    
+    # ===== 3. RSI Strategies (10) =====
+    'RSIOversold': rsi_oversold,
+    'RSIBullishDivergence': rsi_bullish_divergence,
+    'RSICrossAbove30': rsi_crosses_above_30,
+    'RSIHigherLows': rsi_higher_lows_vs_price_lower_lows,
+    'RSIExitBearControl': rsi_moving_out_of_bear_control,
+    'RSIAbove50': rsi_above_50,
+    'RSITrendlineBreak': rsi_trendline_breakout,
+    'RSIMultiTFConvergence': rsi_multi_timeframe_convergence,
+    'RSIDoubleBottom': rsi_double_bottom,
+    'RSIBullishStructure': rsi_holding_bullish_structure,
+    
+    # ===== 4. MACD Strategies (10) =====
+    'MACDBullishCross': macd_bullish_crossover,
+    'MACDHistGreen': macd_histogram_flips_green,
+    'MACDBullishDivergence': macd_bullish_divergence,
+    'MACDCrossAboveZero': macd_crossover_above_zero,
+    'MACDZeroSupport': macd_support_at_zero,
+    'MACDTrendUp': macd_trending_upward_with_price,
+    'MACDMultiTFCross': macd_crossover_multiple_timeframes,
+    'MACDHistExpanding': macd_histogram_expanding,
+    'MACDFakeout': macd_fakeout_signal,
+    'MACDWideSeparation': macd_wide_separation_forming,
+    
+    # ===== 5. Chart Pattern Strategies (10) =====
+    'CupHandleBreakout': cup_and_handle_breakout,
+    'InverseHnS': inverse_head_and_shoulders,
+    'AscTriangleBreak': ascending_triangle_breakout,
+    'FallingWedgeBreak': falling_wedge_breakout,
+    'BullFlagBreakout': bull_flag_breakout,
+    'SymTriangleBreak': symmetrical_triangle_breakout,
+    'DoubleBottomConfirm': double_bottom_confirmation,
+    'RoundedBottom': rounded_bottom_formation,
+    'ConsolidationBreak': breakout_from_consolidation_range,
+    'ExpTriangleBreak': expanding_triangle_breakout_upward,
+    
+    # ===== 6. Support/Resistance Strategies (10) =====
+    'BounceLongTermSupport': bounce_from_long_term_support,
+    'FlipResistToSupport': price_flips_resistance_into_support,
+    'ConfluenceSupport': confluence_of_support,
+    'MultiTestLevel': horizontal_level_tested_multiple_times,
+    'PsychLevel': strong_psychological_level,
+    'WeeklySupportDaily': support_from_weekly_respected_on_daily,
+    'RejectBreakdown': price_rejects_breakdown_from_key_support,
+    'RetestBreakoutZone': price_retests_prior_breakout_zone,
+    'SupportWithDivergence': support_with_bullish_divergence,
+    'FibConfluenceSupport': support_aligning_with_fib_retracement,
+    
+    # ===== 7. Fibonacci Strategies (10) =====
+    'Buy618Fib': buy_at_618_fib_retracement,
+    'Buy382Bounce': buy_near_382_bounce,
+    'FibSupportConfluence': confluence_of_fib_and_support,
+    'Reclaim50Fib': buy_when_price_reclaims_05_fib,
+    'FibExtensionTarget': fib_extension_targets_reached,
+    'FibFanBounce': fib_fan_support_bounce,
+    'FibClusterConfirm': fib_cluster_zone_with_indicators,
+    'FibConsolidation': price_consolidates_between_fib_levels,
+    'FibParabolicRetrace': fib_retracement_after_parabolic_move,
+    'GoldenPocket': buy_at_golden_pocket_zone,
+    
+    # ===== 8. Other Indicator Strategies (10) =====
+    'StochRSIOversold': stochastic_rsi_oversold_cross_up,
+    'ADXBullishDI': adx_bullish_di,
+    'CCIAboveNeg100': cci_crossing_above_minus_100,
+    'WilliamsROversold': williams_r_coming_out_of_oversold,
+    'AroonUpCross': aroon_up_crosses_above_aroon_down,
+    'ChaikinPositive': chaikin_money_flow_turns_positive,
+    'KlingerBullCross': klinger_volume_oscillator_bullish_cross,
+    'TrixZeroCross': trix_indicator_crosses_zero,
+    'MFIRising': money_flow_index_rising,
+    'DMIPlusCross': dmi_plus_crosses_above_dmi_minus,
+    
+    # ===== 9. Trend/Structure Strategies (10) =====
+    'HHHL': higher_high_higher_low,
+    'BreakBearTrendline': break_of_bearish_trendline,
+    'RetestTrendline': retest_of_broken_trendline,
+    'TrendContinuation': trend_continuation_after_consolidation,
+    'MultiTFStructure': bullish_market_structure_multiple_timeframes,
+    'BreakSwingHigh': break_of_previous_swing_high,
+    'ChannelBounce': rising_channel_midline_support_bounce,
+    'ReclaimRangeHigh': price_reclaiming_previous_range_high,
+    'SupportAboveResist': support_formed_above_previous_resistance,
+    'LowVolBreakout': low_volatility_range_breakout,
+    
+    # ===== 10. Candlestick Patterns (48) =====
+    'Hammer': hammer,
+    'InverseHammer': inverse_hammer,
+    'BullMarubozu': bullish_marubozu,
+    'DragonflyDoji': dragonfly_doji,
+    'SpinningTopBull': spinning_top_bullish,
+    'HangingManBull': hanging_man_in_uptrend,
+    'BullEngulfing': bullish_engulfing,
+    'PiercingLine': piercing_line,
+    'TweezerBottom': tweezer_bottom,
+    'KickingBullish': kicking_bullish,
+    'MatchingLow': matching_low,
+    'LastEngulfBottom': last_engulfing_bottom,
+    'OnNeckBullish': on_neck_line_bullish,
+    'MorningStar': morning_star,
+    'MorningDojiStar': morning_doji_star,
+    'AbandonedBabyBull': abandoned_baby_bullish,
+    'ThreeInsideUp': three_inside_up,
+    'ThreeOutsideUp': three_outside_up,
+    'StickSandwichBull': stick_sandwich_bullish,
+    'TriStarBullish': tri_star_bullish,
+    'ThreeWhiteSoldiers': three_white_soldiers,
+    'RisingThreeMethods': rising_three_methods,
+    'SeparatingLinesBull': separating_lines_bullish,
+    'MatHold': mat_hold,
+    'SideWhiteLines': side_by_side_white_lines,
+    'UpsideTasukiGap': upside_tasuki_gap,
+    'BullFlagPattern': bullish_flag_breakout,
+    'BullPennantBreak': bullish_pennant_breakout,
+    'FallingWedgeBull': falling_wedge_breakout,
+    'SymTriangleBull': symmetrical_triangle_breakout_upward,
+    'AscTriangleBull': ascending_triangle_breakout,
+    'DoubleBottomBull': double_bottom_breakout,
+    'TripleBottomBull': triple_bottom_breakout,
+    'RoundingBottomBull': rounding_bottom_breakout,
+    'CupHandleBull': cup_and_handle_breakout,
+    'BreakawayGapBull': breakaway_gap_bullish,
+    'RunawayGapBull': runaway_gap_bullish,
+    'IslandReversalBull': island_reversal_bullish,
+    'BullCounterattack': bullish_counterattack_line,
+    'LadderBottom': ladder_bottom,
+    'ThreeRiverBottom': unique_three_river_bottom,
+    'ConcealingSwallow': concealing_baby_swallow,
+    'HammerRSI': hammer_rsi_oversold,
+    'EngulfMACD': bullish_engulfing_macd_crossover,
+    'MorningStarVolume': morning_star_volume_spike,
+    'SoldiersADX': three_white_soldiers_adx
+    }
+
+    for strategy_name, strategy_func in strategy_mapping.items():
+        df[strategy_name] = df.apply(strategy_func, axis=1)
+
+    # ===== 9. Composite Signals =====
+    df['BullishConfidenceScore'] = (
+        df['GoldenCross'] * 0.15 +
+        df['BullishEngulfing'] * 0.2 +
+        df['RSIOversold'] * 0.1 +
+        df['MACDBullishCrossover'] * 0.15 +
+        df['VolumeSpikeGreen'] * 0.1 +
+        df['PriceAboveAllMAs'] * 0.1 +
+        df['HigherHighHigherLow'] * 0.2
+    )
 
     return df
 
