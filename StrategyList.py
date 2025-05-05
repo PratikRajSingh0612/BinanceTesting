@@ -244,7 +244,6 @@ def allstrategiesv2(df):
     'TweezerBottom': tweezer_bottom,
     'KickingBullish': kicking_bullish,
     'MatchingLow': matching_low,
-    'LastEngulfBottom': last_engulfing_bottom,
     'OnNeckBullish': on_neck_line_bullish,
     'MorningStar': morning_star,
     'MorningDojiStar': morning_doji_star,
@@ -445,7 +444,7 @@ def rsi_above_50(row):
         return 1
     return 0
 
-def rsi_trendline_breakout_strategy(row):
+def rsi_trendline_breakout(row):
     # Ensure required columns exist and are not NaN
     required_cols = ['RSI', 'RSI_prev', 'RSI_prev2']
     if any(col not in row or pd.isna(row[col]) for col in required_cols):
@@ -660,14 +659,16 @@ def horizontal_level_tested_multiple_times(row):
     return 0
 
 def strong_psychological_level(row):
-    if (pd.notna(row['Close']) and pd.notna(row['Support']) and 
-            row['Close'] > 0):
-            nearest_10 = round(row['Close'] / 10) * 10
-            nearest_100 = round(row['Close'] / 100) * 100
-            if (abs(row['Close'] - nearest_10) / row['Close'] < 0.01 or 
-                abs(row['Close'] - nearest_100) / row['Close'] < 0.01) and 
-                row['Close'] > row['Support']:  # Confirm support
-                return 1
+    if (pd.notna(row['Close']) and pd.notna(row['Support']) and row['Close'] > 0):
+        nearest_10 = round(row['Close'] / 10) * 10
+        nearest_100 = round(row['Close'] / 100) * 100
+        
+        if (
+            (abs(row['Close'] - nearest_10) / row['Close'] < 0.01 or 
+             abs(row['Close'] - nearest_100) / row['Close'] < 0.01)
+            and (row['Close'] > row['Support'])
+        ):
+            return 1
     return 0
 
 def support_from_weekly_respected_on_daily(row):
