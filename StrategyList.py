@@ -1136,36 +1136,31 @@ def trix_indicator_crosses_zero(row, confirmation_bars=3, volume_threshold=1.2, 
     """
     Enhanced TRIX strategy using proper history columns
     """
-    try:
-        # Safely get values
-        current_trix = float(row.get('Trix', 0))
-        prev_trix = float(row.get('Trix_prev', 0))
-        
-        # Check confirmation using individual columns
-        confirmation = True
-        for i in range(1, confirmation_bars + 1):
-            confirmation = confirmation and (float(row.get(f'Trix_prev_{i}', 0)) > 0)
-        
-        # Additional filters
-        volume_ok = (float(row.get('Volume', 0)) > 
-                    volume_threshold * float(row.get('Volume_20_SMA', 1)))
-        rsi_ok = float(row.get('RSI', 100)) > rsi_threshold
-        trend_ok = float(row.get('Close', 0)) > float(row.get('EMA_50', 0))
-        
-        conditions = [
-            current_trix > 0,
-            prev_trix <= 0,
-            confirmation,
-            volume_ok,
-            rsi_ok,
-            trend_ok
-        ]
-        
-        return 1 if all(conditions) else 0
-        
-    except Exception as e:
-        print(f"Strategy error: {e}")
-        return 0
+    # Safely get values
+    current_trix = float(row.get('Trix', 0))
+    prev_trix = float(row.get('Trix_prev', 0))
+    
+    # Check confirmation using individual columns
+    confirmation = True
+    for i in range(1, confirmation_bars + 1):
+        confirmation = confirmation and (float(row.get(f'Trix_prev_{i}', 0)) > 0)
+    
+    # Additional filters
+    volume_ok = (float(row.get('Volume', 0)) > 
+                volume_threshold * float(row.get('Volume_20_SMA', 1)))
+    rsi_ok = float(row.get('RSI', 100)) > rsi_threshold
+    trend_ok = float(row.get('Close', 0)) > float(row.get('EMA_50', 0))
+    
+    conditions = [
+        current_trix > 0,
+        prev_trix <= 0,
+        confirmation,
+        volume_ok,
+        rsi_ok,
+        trend_ok
+    ]
+    
+    return 1 if all(conditions) else 0
 
 def money_flow_index_rising(row):
     if (pd.notna(row['MFI']) and pd.notna(row['MFI_prev']) and 
