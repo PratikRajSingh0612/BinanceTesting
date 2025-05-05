@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import os
 import pandas_ta as ta
 from tqdm import tqdm
+from scipy.stats import linregress
 
 
 def getMarketDetails(client):
@@ -157,3 +158,55 @@ def add_fibonacci_support(df, lookback_periods):
         print(f"Error adding Fib_Support: {e}")
         df['Fib_Support'] = 0
         return df
+    
+def detect_bearish_trendlines(df, lookback=20, min_touches=3, tolerance=0.01):
+    highs = df['High'].values
+    dates = np.arange(len(highs))
+
+    # Initialize output columns
+    df['Trendline'] = np.nan
+    df['Trendline_Touches'] = 0
+    df['Trendline_Slope'] = np.nan
+
+    for i in range(lookback, len(df)):
+        window_highs = highs[i-lookback:i]
+        window_dates = dates[i-lookback:i]
+        
+        # Find potential lower highs
+        peak_indices = []
+        for j in range(1, len(window_highs)-1):
+            if window_highs[j] > window_highs[j-1] and window_highs[j] > window_highs[j+1]:
+                peak_indices.append(j)
+        
+        if len(peak_indices) >= min_touches:
+            # Try to fit trendline to the peaks
+            peak_highs = window_highs[peak_indices]
+            peak_dates = window_dates[peak_indices]
+            
+            slope, intercept, _, _, _ = linregress(peak_dates, peak_highs)
+            
+            # Count touches (including nearby points)
+            touch_count = 0
+            for j in range(len(window_highs)):
+                trendline_val = intercept + slope * window_dates[j]
+                if abs(window_highs[j] - trendline_val) <= tolerance * window_highs[j]:
+                    touch_count += 1
+            
+            if touch_count >= min_touches:
+                # Project trendline to current point
+                current_trendline = intercept + slope * dates[i]
+                df.at[df.index[i], 'Trendline'] = current_trendline
+                df.at[df.index[i], 'Trendline_Touches'] = touch_count
+                df.at[df.index[i], 'Trendline_Slope'] = slope
+
+    # Forward fill the trendline values
+    df['Trendline'].fillna(method='ffill', inplace=True)
+    df['Trendline_Touches'].fillna(method='ffill', inplace=True)
+    df['Trendline_Slope'].fillna(method='ffill', inplace=True)
+
+    # Fill any remaining NaNs
+    df['Trendline'].fillna(np.inf, inplace=True)  # No trendline = infinite resistance
+    df['Trendline_Touches'].fillna(0, inplace=True)
+    df['Trendline_Slope'].fillna(0, inplace=True)
+
+    return df

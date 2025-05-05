@@ -23,6 +23,86 @@ def allstrategiesv2(df, symbol, client, BackTime):
     df['Low_prev'] = df['Low'].shift(1)
     df['Volume_prev'] = df['Volume'].shift(1)
     
+    period = 20
+    # Calculate Money Flow Multiplier (MFM)
+    df['MFM'] = ((df['Close'] - df['Low']) - (df['High'] - df['Close'])) / (df['High'] - df['Low'])
+    
+    # Calculate Money Flow Volume (MFV)
+    df['MFV'] = df['MFM'] * df['Volume']
+    
+    # Calculate Chaikin Money Flow (CMF)
+    df['CMF'] = df['MFV'].rolling(window=period).sum() / df['Volume'].rolling(window=period).sum()
+    
+    # Shift to get the previous CMF value
+    df['CMF_prev'] = df['CMF'].shift(1)
+
+    # Calculate Typical Price
+    df['Typical_price'] = (df['High'] + df['Low'] + df['Close']) / 3
+    
+    # Calculate SMA of Typical Price
+    df['SMA_Typical_price'] = df['Typical_price'].rolling(window=20).mean()
+    
+    # Calculate Mean Deviation
+    df['Mean_Deviation'] = df['Typical_price'].rolling(window=20).apply(
+        lambda x: np.mean(np.abs(x - np.mean(x))), raw=True
+    )
+    
+    df['TD'] = ((df['Typical_price'] > df['Typical_price'].shift(1)) * 2 - 1)
+    
+    # Calculate Volume Force (VF)
+    df['VF'] = df['TD'] * df['Volume'] * (2 * (df['Close'] - df['Low'] - (df['High'] - df['Close'])) / (df['High'] - df['Low']))
+    
+    # Calculate the short and long EMA of VF
+    df['Short_EMA'] = df['VF'].ewm(span=34, adjust=False).mean()
+    df['Long_EMA'] = df['VF'].ewm(span=55, adjust=False).mean()
+    
+    # Calculate KVO
+    df['KVO'] = df['Short_EMA'] - df['Long_EMA']
+    
+    # Calculate the Signal Line as EMA of KVO
+    df['KVO_Signal'] = df['KVO'].ewm(span=13, adjust=False).mean()
+    
+    # Shift to get previous KVO values
+    df['KVO_prev'] = df['KVO'].shift(1)
+    df['KVO_Signal_prev'] = df['KVO_Signal'].shift(1)
+
+    # Calculate CCI
+    df['CCI'] = (df['Typical_price'] - df['SMA_Typical_price']) / (0.015 * df['Mean_Deviation'])
+    df['CCI_prev'] = df['CCI'].shift(1).fillna(0)
+    
+    # Calculate TRIX - handle different output formats
+    trix_data = ta.trix(df['Close'], length=15)
+    
+    # Handle multi-column output
+    if isinstance(trix_data, pd.DataFrame):
+        # Some libraries return DataFrame with multiple columns
+        df['Trix'] = trix_data.iloc[:, 0]  # First column is TRIX line
+        if trix_data.shape[1] > 1:
+            df['Trix_signal'] = trix_data.iloc[:, 1]  # Second column is signal line
+    else:
+        # Assume single Series output
+        df['Trix'] = trix_data
+    
+    # Create previous values
+    df['Trix_prev'] = df['Trix'].shift(1)
+    
+    # Create individual history columns
+    for i in range(1, 3 + 1):
+        df[f'Trix_prev_{i}'] = df['Trix'].shift(i)
+    
+    # Create confirmation flag
+    df['Trix_above_zero'] = True
+    for i in range(1, 3 + 1):
+        df['Trix_above_zero'] = (df['Trix_above_zero'] & 
+                                (df[f'Trix_prev_{i}'] > 0))
+    
+    # Fill NA values
+    cols_to_fill = ['Trix', 'Trix_prev'] + \
+                    [f'Trix_prev_{i}' for i in range(1, 3 + 1)]
+    for col in cols_to_fill:
+        df[col].fillna(0, inplace=True)
+    df['Trix_above_zero'].fillna(False, inplace=True)
+
     # Multi-period lookbacks
     for i in range(2, 6):
         df[f'Close_prev{i}'] = df['Close'].shift(i)
@@ -63,17 +143,25 @@ def allstrategiesv2(df, symbol, client, BackTime):
     macd_4h = MACD(candles_4h['Close'], window_fast=12, window_slow=26, window_sign=9)
     candles_4h['MACD_4H'] = macd_4h.macd()
     candles_4h['MACD_Signal_4H'] = macd_4h.macd_signal()
+    candles_4h['High_4H'] = candles_4h['High']
+    candles_4h['High_4H_prev'] = candles_4h['High'].shift(1)
+    candles_4h['Low_4H'] = candles_4h['Low']
+    candles_4h['Low_4H_prev'] = candles_4h['Low'].shift(1)
 
     # Fetch daily candles
-    candles_1d = get_candles_data(symbol, '4h', 1000, BackTime, client)
+    candles_1d = get_candles_data(symbol, '1d', 1000, BackTime, client)
     candles_1d['RSI_1D'] = RSIIndicator(candles_1d['Close'], window=14).rsi()
     macd_1d = MACD(candles_1d['Close'], window_fast=12, window_slow=26, window_sign=9)
     candles_1d['MACD_1D'] = macd_1d.macd()
     candles_1d['MACD_Signal_1D'] = macd_1d.macd_signal()
+    candles_1d['High_1D'] = candles_1d['High']
+    candles_1d['High_1D_prev'] = candles_1d['High'].shift(1)
+    candles_1d['Low_1D'] = candles_1d['Low']
+    candles_1d['Low_1D_prev'] = candles_1d['Low'].shift(1)
     
     # Merge RSI values into original DataFrame (align by timestamp)
-    df = df.merge(candles_4h[['Close Time', 'RSI_4H', 'MACD_4H', 'MACD_Signal_4H']], on='Close Time', how='left')
-    df = df.merge(candles_1d[['Close Time', 'RSI_1D', 'MACD_1D', 'MACD_Signal_1D']], on='Close Time', how='left')
+    df = df.merge(candles_4h[['Close Time', 'RSI_4H', 'MACD_4H', 'MACD_Signal_4H', 'High_4H', 'High_4H_prev', 'Low_4H', 'Low_4H_prev']], on='Close Time', how='left')
+    df = df.merge(candles_1d[['Close Time', 'RSI_1D', 'MACD_1D', 'MACD_Signal_1D', 'High_1D', 'High_1D_prev', 'Low_1D', 'Low_1D_prev']], on='Close Time', how='left')
     
     # Forward-fill missing values and default to 0
     for col in ['RSI_4H', 'RSI_1D', 'MACD_4H', 'MACD_Signal_4H', 'MACD_1D', 'MACD_Signal_1D']:
@@ -94,24 +182,26 @@ def allstrategiesv2(df, symbol, client, BackTime):
 
 
     # Stochastic
-    # Calculate StochRSI
-    stochrsi_k, stochrsi_d = ta.stochrsi(
-        df['Close'], 
-        timeperiod=14,
-        fastk_period=3,
-        fastd_period=3,
-        fastd_matype=0
+    # Calculate Stochastic RSI
+    stoch_rsi = ta.stochrsi(
+        close=df['Close'],
+        window=14,
+        smooth_window=14,
+        smooth_k=3,
+        smooth_d=3
     )
-    
-    df['StochRSI_K'] = stochrsi_k
-    df['StochRSI_D'] = stochrsi_d
+
+    df['StochRSI_K'] = stoch_rsi['STOCHRSIk_14_14_3_3']
+    df['StochRSI_D'] = stoch_rsi['STOCHRSId_14_14_3_3']
     df['StochRSI_prev'] = df['StochRSI_K'].shift(1)
 
     # ADX
-    adx = ta.adx(df['High'], df['Low'], df['Close'])
+    adx = ta.adx(df['High'], df['Low'], df['Close'], length=14)
     df['ADX'] = adx['ADX_14']
-    df['DI+'] = adx['DMP_14']
-    df['DI-'] = adx['DMN_14']
+    df['DMI+'] = adx['DMP_14']
+    df['DMI-'] = adx['DMN_14']
+    df['DMI+_prev'] = df['DMI+'].shift(1)
+    df['DMI-_prev'] = df['DMI-'].shift(1)
 
     # ===== 5. Support/Resistance =====
     df['Support'] = df['Low'].rolling(20).min()
@@ -120,6 +210,13 @@ def allstrategiesv2(df, symbol, client, BackTime):
     df['Swing_Low'] = df['Low'].rolling(50).min()
     df['Support_Tests'] = df['Low'].rolling(20).apply(lambda x: (x == x.min()).sum())
     df['Is_Swing_High'] = (df['High'] == df['High'].rolling(window=5, center=True, min_periods=1).max())
+
+    # Calculate the Williams %R
+    df['WilliamsR'] = (df['Resistance'] - df['Close']) / (df['Resistance'] - df['Support']) * -100
+    
+    # Shift to get the previous Williams %R
+    df['WilliamsR_prev'] = df['WilliamsR'].shift(1)
+    
 
     # Get recent swing high and low
     recent_high = df['High'].rolling(20).max()
@@ -171,6 +268,14 @@ def allstrategiesv2(df, symbol, client, BackTime):
     
     df['Volume_Support_Signal'] = np.where(conditions, 1, 0)
 
+    period=25
+    df['AroonUp'] = df['High'].rolling(window=period + 1).apply(lambda x: float(x.argmax()) / period * 100, raw=True)
+    df['AroonDown'] = df['Low'].rolling(window=period + 1).apply(lambda x: float(x.argmin()) / period * 100, raw=True)
+    
+    # Shift to get the previous values for comparison
+    df['AroonUp_prev'] = df['AroonUp'].shift(1)
+    df['AroonDown_prev'] = df['AroonDown'].shift(1)
+
 
     # ===== 6. Fibonacci Levels =====
     df['Fib_382'] = df['Close'] * 0.382
@@ -190,6 +295,60 @@ def allstrategiesv2(df, symbol, client, BackTime):
     df['Is_Bearish'] = (df['Close'] < df['Open']).astype(int)
     df['Is_Doji'] = (df['Candle_Body'] < 0.001 * df['Close']).astype(int)
 
+    # Calculate raw money flow
+    df['money_flow'] = df['Typical_price'] * df['Volume']
+    
+    # Get direction of money flow
+    df['positive_flow'] = (df['Typical_price'] > df['Typical_price'].shift(1)) * df['money_flow']
+    df['negative_flow'] = (df['Typical_price'] < df['Typical_price'].shift(1)) * df['money_flow']
+    
+    # Calculate MFI
+    df['positive_sum'] = df['positive_flow'].rolling(period).sum()
+    df['negative_sum'] = df['negative_flow'].rolling(period).sum()
+    df['money_ratio'] = df['positive_sum'] / df['negative_sum']
+    df['MFI'] = 100 - (100 / (1 + df['money_ratio']))
+    
+    # Create previous value
+    df['MFI_prev'] = df['MFI'].shift(1)
+    
+    # Fill NA values
+    df['MFI'].fillna(50, inplace=True)  # Neutral value
+    df['MFI_prev'].fillna(50, inplace=True)
+
+    # Calculate channel boundaries
+    df['Channel_High'] = df['High'].rolling(20).max()
+    df['Channel_Low'] = df['Low'].rolling(20).min()
+    
+    # Calculate midline and width
+    df['Channel_Midline'] = (df['Channel_High'] + df['Channel_Low']) / 2
+    df['Channel_Width'] = df['Channel_High'] - df['Channel_Low']
+    
+    # Create previous values
+    df['Channel_Midline_prev'] = df['Channel_Midline'].shift(1)
+    df['Channel_High_prev'] = df['Channel_High'].shift(1)
+    df['Channel_Low_prev'] = df['Channel_Low'].shift(1)
+    
+    # Fill NA values
+    cols = ['Channel_High', 'Channel_Low', 'Channel_Midline', 'Channel_Width',
+            'Channel_Midline_prev', 'Channel_High_prev', 'Channel_Low_prev']
+    for col in cols:
+        df[col].fillna(method='bfill', inplace=True)
+    
+    df = detect_bearish_trendlines(df, lookback=20, min_touches=3)
+
+    consolidation_period = 10
+    lookback = 20
+    df['Range_High'] = df['High'].rolling(consolidation_period).max()
+    df['Range_Low'] = df['Low'].rolling(consolidation_period).min()
+    
+    # Calculate additional metrics
+    df['Range_Midpoint'] = (df['Range_High'] + df['Range_Low']) / 2
+    df['Range_Width'] = df['Range_High'] - df['Range_Low']
+    
+    # Create previous values
+    df['Range_High_prev'] = df['Range_High'].shift(lookback)
+    df['Range_Low_prev'] = df['Range_Low'].shift(lookback)
+    
     # ===== 8. Apply All 138 Strategies =====
     strategy_mapping = {
     # ===== 1. Moving Average Strategies (10) =====
@@ -356,10 +515,10 @@ def allstrategiesv2(df, symbol, client, BackTime):
         df['GoldenCross'] * 0.15 +
         df['BullishEngulfing'] * 0.2 +
         df['RSIOversold'] * 0.1 +
-        df['MACDBullishCrossover'] * 0.15 +
+        df['MACDBullishCross'] * 0.15 +
         df['VolumeSpikeGreen'] * 0.1 +
         df['PriceAboveAllMAs'] * 0.1 +
-        df['HigherHighHigherLow'] * 0.2
+        df['HHHL'] * 0.2
     )
 
     strategy_names = list(strategy_mapping.keys())
@@ -875,7 +1034,7 @@ def buy_at_golden_pocket_zone(row,
         candle_confirmation: Require bullish candle (default True)
     """
     # Check required values exist
-    required_cols = ['Close', 'Fib_618', 'Fib_65', 'Close_prev', 'RSI', 'Volume', 'Volume_MA']
+    required_cols = ['Close', 'Fib_618', 'Fib_65', 'Close_prev', 'RSI', 'Volume', 'Volume_20_SMA']
     if not all(col in row and pd.notna(row[col]) for col in required_cols):
         return 0
     
@@ -887,7 +1046,7 @@ def buy_at_golden_pocket_zone(row,
     
     # Indicator confirmations
     rsi_confirm = (row['RSI'] > rsi_threshold)
-    volume_confirm = (row['Volume'] > volume_multiplier * row['Volume_MA'])
+    volume_confirm = (row['Volume'] > volume_multiplier * row['Volume_20_SMA'])
     
     # Optional candle confirmation
     candle_confirm = (not candle_confirmation) or (row['Close'] > row['Open'])
@@ -936,8 +1095,8 @@ def stochastic_rsi_oversold_cross_up(row):
     return 1 if (condition1 and condition2 and condition3 and condition4) else 0
 
 def adx_bullish_di(row):
-    if (pd.notna(row['ADX']) and pd.notna(row['DI+']) and pd.notna(row['DI-']) and 
-            row['ADX'] > 25 and row['DI+'] > row['DI-']):
+    if (pd.notna(row['ADX']) and pd.notna(row['DMI+']) and pd.notna(row['DMI-']) and 
+            row['ADX'] > 25 and row['DMI+'] > row['DMI-']):
             return 1
     return 0
 
@@ -973,11 +1132,40 @@ def klinger_volume_oscillator_bullish_cross(row):
             return 1
     return 0
 
-def trix_indicator_crosses_zero(row):
-    if (pd.notna(row['Trix']) and pd.notna(row['Trix_prev']) and 
-            row['Trix'] > 0 and row['Trix_prev'] <= 0):
-            return 1
-    return 0
+def trix_indicator_crosses_zero(row, confirmation_bars=3, volume_threshold=1.2, rsi_threshold=50):
+    """
+    Enhanced TRIX strategy using proper history columns
+    """
+    try:
+        # Safely get values
+        current_trix = float(row.get('Trix', 0))
+        prev_trix = float(row.get('Trix_prev', 0))
+        
+        # Check confirmation using individual columns
+        confirmation = True
+        for i in range(1, confirmation_bars + 1):
+            confirmation = confirmation and (float(row.get(f'Trix_prev_{i}', 0)) > 0)
+        
+        # Additional filters
+        volume_ok = (float(row.get('Volume', 0)) > 
+                    volume_threshold * float(row.get('Volume_20_SMA', 1)))
+        rsi_ok = float(row.get('RSI', 100)) > rsi_threshold
+        trend_ok = float(row.get('Close', 0)) > float(row.get('EMA_50', 0))
+        
+        conditions = [
+            current_trix > 0,
+            prev_trix <= 0,
+            confirmation,
+            volume_ok,
+            rsi_ok,
+            trend_ok
+        ]
+        
+        return 1 if all(conditions) else 0
+        
+    except Exception as e:
+        print(f"Strategy error: {e}")
+        return 0
 
 def money_flow_index_rising(row):
     if (pd.notna(row['MFI']) and pd.notna(row['MFI_prev']) and 
@@ -1042,20 +1230,80 @@ def break_of_previous_swing_high(row):
             return 1
     return 0
 
-def rising_channel_midline_support_bounce(row):
-    if (pd.notna(row['Close']) and pd.notna(row['Channel_Midline']) and 
-            row['Channel_Midline'] != 0 and 
-            abs(row['Close'] - row['Channel_Midline']) / row['Channel_Midline'] < 0.01 and 
-            row['Close'] > row['Channel_Midline']):
-            return 1
-    return 0
+def rising_channel_midline_support_bounce(row, 
+                                        tolerance=0.01, 
+                                        volume_multiplier=1.5,
+                                        rsi_threshold=50,
+                                        min_width_pct=0.005,
+                                        min_trend_bars=3):
+    # Safely get values with defaults
+    close = float(row.get('Close', 0))
+    midline = float(row.get('Channel_Midline', 0))
+    prev_midline = float(row.get('Channel_Midline_prev', 0))
+    width = float(row.get('Channel_Width', 0))
+    
+    # 1. Price position conditions
+    near_midline = abs(close - midline) / midline < tolerance
+    above_midline = close > midline
+    
+    # 2. Channel quality conditions
+    valid_width = width > min_width_pct * midline
+    rising_trend = True
+    for i in range(1, min_trend_bars+1):
+        if f'Channel_Midline_prev_{i}' in row:
+            rising_trend = rising_trend and (midline > float(row[f'Channel_Midline_prev_{i}']))
+    
+    # 3. Momentum/volume conditions
+    volume_ok = (float(row.get('Volume', 0)) > volume_multiplier * float(row.get('Volume_20_SMA', 1)))
+    rsi_ok = float(row.get('RSI', 50)) > rsi_threshold
+    
+    conditions = [
+        near_midline,
+        above_midline,
+        valid_width, 
+        rising_trend,
+        volume_ok,
+        rsi_ok
+    ]
+    
+    return 1 if all(conditions) else 0
 
-def price_reclaiming_previous_range_high(row):
-    if (pd.notna(row['Close']) and pd.notna(row['Range_High']) and 
-            pd.notna(row['Close_prev']) and 
-            row['Close'] > row['Range_High'] and row['Close_prev'] <= row['Range_High']):
-            return 1
-    return 0
+def price_reclaiming_previous_range_high(row, 
+                                       volume_multiplier=1.5,
+                                       rsi_threshold=50,
+                                       min_width_pct=0.01,
+                                       trend_confirmation=True):
+    
+    close = float(row.get('Close', 0))
+    range_high = float(row.get('Range_High', 0))
+    prev_close = float(row.get('Close_prev', 0))
+    range_width = float(row.get('Range_Width', 0))
+    
+    # 1. Core breakout condition
+    breakout = (close > range_high and prev_close <= range_high)
+    
+    # 2. Range quality conditions
+    valid_width = range_width > min_width_pct * range_high
+    
+    # 3. Momentum/volume conditions
+    volume_ok = (float(row.get('Volume', 0)) > 
+                volume_multiplier * float(row.get('Volume_MA', 1)))
+    rsi_ok = float(row.get('RSI', 50)) > rsi_threshold
+    
+    # 4. Trend confirmation (optional)
+    trend_ok = True
+    if trend_confirmation and 'EMA_50' in row:
+        trend_ok = close > float(row['EMA_50'])
+    
+    conditions = [
+        breakout,
+        valid_width,
+        volume_ok,
+        rsi_ok,
+        trend_ok
+    ]
+    
+    return 1 if all(conditions) else 0
 
 def support_formed_above_previous_resistance(row):
     if (pd.notna(row['Support']) and pd.notna(row['Resistance']) and 
