@@ -5,9 +5,17 @@ from datetime import datetime, timedelta
 import os
 import pandas_ta as ta
 from tqdm import tqdm
+from ta.momentum import RSIIndicator
+from ta.trend import MACD
+
+import importlib
+import BaseFunctions
+importlib.reload(BaseFunctions)
+from BaseFunctions import *
 
 
-def allstrategiesv2(df):
+    
+def allstrategiesv2(df, symbol, client, BackTime):
     # ===== 1. Basic Price Transformations =====
     df['Close_prev'] = df['Close'].shift(1)
     df['Open_prev'] = df['Open'].shift(1)
@@ -21,6 +29,7 @@ def allstrategiesv2(df):
         df[f'Open_prev{i}'] = df['Open'].shift(i)
         df[f'High_prev{i}'] = df['High'].shift(i)
         df[f'Low_prev{i}'] = df['Low'].shift(i)
+        df[f'Volume_prev{i}'] = df['Volume'].shift(i)
 
     # ===== 2. Moving Averages =====
     ma_periods = [10, 20, 50, 200]
@@ -48,6 +57,32 @@ def allstrategiesv2(df):
     df['RSI_prev2'] = df['RSI'].shift(2)
     df['RSI_Trendline'] = df['RSI'].rolling(window=5).mean()  # Example trendline
     
+    # Fetch 4-hour candles
+    candles_4h = get_candles_data(symbol, '4h', 1000, BackTime, client)
+    candles_4h['RSI_4H'] = RSIIndicator(candles_4h['Close'], window=14).rsi()
+    macd_4h = MACD(candles_4h['Close'], window_fast=12, window_slow=26, window_sign=9)
+    candles_4h['MACD_4H'] = macd_4h.macd()
+    candles_4h['MACD_Signal_4H'] = macd_4h.macd_signal()
+
+    # Fetch daily candles
+    candles_1d = get_candles_data(symbol, '4h', 1000, BackTime, client)
+    candles_1d['RSI_1D'] = RSIIndicator(candles_1d['Close'], window=14).rsi()
+    macd_1d = MACD(candles_1d['Close'], window_fast=12, window_slow=26, window_sign=9)
+    candles_1d['MACD_1D'] = macd_1d.macd()
+    candles_1d['MACD_Signal_1D'] = macd_1d.macd_signal()
+    
+    # Merge RSI values into original DataFrame (align by timestamp)
+    df = df.merge(candles_4h[['Close Time', 'RSI_4H', 'MACD_4H', 'MACD_Signal_4H']], on='Close Time', how='left')
+    df = df.merge(candles_1d[['Close Time', 'RSI_1D', 'MACD_1D', 'MACD_Signal_1D']], on='Close Time', how='left')
+    
+    # Forward-fill missing values and default to 0
+    for col in ['RSI_4H', 'RSI_1D', 'MACD_4H', 'MACD_Signal_4H', 'MACD_1D', 'MACD_Signal_1D']:
+        df[col] = df[col].fillna(method='ffill').fillna(0)
+
+    # Forward-fill missing RSI values
+    df['RSI_4H'] = df['RSI_4H'].fillna(method='ffill')
+    df['RSI_1D'] = df['RSI_1D'].fillna(method='ffill')
+
     # MACD
     macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
     df['MACD'] = macd['MACD_12_26_9']
@@ -56,6 +91,7 @@ def allstrategiesv2(df):
     df['MACD_prev'] = df['MACD'].shift(1)
     df['MACD_Signal_prev'] = df['MACD_Signal'].shift(1)
     df['MACD_Histogram_prev'] = df['MACD_Histogram'].shift(1)
+
 
     # Stochastic
     # Calculate StochRSI
@@ -83,6 +119,36 @@ def allstrategiesv2(df):
     df['Swing_High'] = df['High'].rolling(50).max()
     df['Swing_Low'] = df['Low'].rolling(50).min()
     df['Support_Tests'] = df['Low'].rolling(20).apply(lambda x: (x == x.min()).sum())
+    df['Is_Swing_High'] = (df['High'] == df['High'].rolling(window=5, center=True, min_periods=1).max())
+
+    # Get recent swing high and low
+    recent_high = df['High'].rolling(20).max()
+    recent_low = df['Low'].rolling(20).min()
+    # Calculate Fibonacci fan support levels (38.2%, 50%, 61.8%)
+    df['Fib_Fan_Support1'] = recent_high - (recent_high - recent_low) * 0.382
+    df['Fib_Fan_Support2'] = recent_high - (recent_high - recent_low) * 0.5
+    df['Fib_Fan_Support3'] = recent_high - (recent_high - recent_low) * 0.618
+    df['Fib_Fan_Support4'] = recent_high - (recent_high - recent_low) * 0.65
+    
+    # Find the closest support level below price
+    supports = df[['Fib_Fan_Support1', 'Fib_Fan_Support2', 'Fib_Fan_Support3']]
+    df['Fib_Fan_Support'] = supports.where(supports.lt(df['Close']), np.nan).max(axis=1)
+
+    df = calculate_fib_cluster(df)
+
+    vol_thresh = 1.5
+    # Vectorized breakout detection
+    swing_highs = df['High'].where(df['Is_Swing_High']).ffill()
+    vol_condition = df['Volume'] > vol_thresh * df['Volume_20_SMA']
+    df['Breakout'] = np.where((df['Close'] > swing_highs) & vol_condition, 
+                           swing_highs, 0)
+    
+    # Dynamic breakout zone with expiration
+    df['BreakoutZone'] = df['Breakout'].replace(0, method='ffill')
+    df['BreakoutZone'] = df['BreakoutZone'].where(
+        df['Close'] > df['BreakoutZone'], 0)
+    
+    
     # Calculate prior resistance levels
     lookback_period = 20
     df['Prior_Resistance'] = df['High'].rolling(lookback_period).max()
@@ -113,6 +179,8 @@ def allstrategiesv2(df):
     df['Fib_786'] = df['Close'] * 0.786
     df['Fib_Extension_1'] = df['Close'] * 1.618
     df['Fib_Extension_2'] = df['Close'] * 2.618
+    df = add_fibonacci_support(df, 50)
+    
 
     # ===== 7. Candlestick Features =====
     df['Candle_Body'] = abs(df['Close'] - df['Open'])
@@ -148,7 +216,7 @@ def allstrategiesv2(df):
     'OBVRising': volume_rising_obv_rising,
     'VolumeSupportBreakout': volume_support_prior_breakout_zone,
     
-    # ===== 3. RSI Strategies (10) =====
+    # # ===== 3. RSI Strategies (10) =====
     'RSIOversold': rsi_oversold,
     'RSIBullishDivergence': rsi_bullish_divergence,
     'RSICrossAbove30': rsi_crosses_above_30,
@@ -190,7 +258,7 @@ def allstrategiesv2(df):
     'ConfluenceSupport': confluence_of_support,
     'MultiTestLevel': horizontal_level_tested_multiple_times,
     'PsychLevel': strong_psychological_level,
-    'WeeklySupportDaily': support_from_weekly_respected_on_daily,
+    # 'WeeklySupportDaily': support_from_weekly_respected_on_daily,
     'RejectBreakdown': price_rejects_breakdown_from_key_support,
     'RetestBreakoutZone': price_retests_prior_breakout_zone,
     'SupportWithDivergence': support_with_bullish_divergence,
@@ -239,7 +307,7 @@ def allstrategiesv2(df):
     'DragonflyDoji': dragonfly_doji,
     'SpinningTopBull': spinning_top_bullish,
     'HangingManBull': hanging_man_in_uptrend,
-    'BullEngulfing': bullish_engulfing,
+    'BullishEngulfing': bullish_engulfing,
     'PiercingLine': piercing_line,
     'TweezerBottom': tweezer_bottom,
     'KickingBullish': kicking_bullish,
@@ -536,7 +604,7 @@ def macd_wide_separation_forming(row):
     if (pd.notna(row['MACD']) and pd.notna(row['MACD_Signal']) and 
             pd.notna(row['MACD_prev']) and pd.notna(row['MACD_Signal_prev']) and 
             row['MACD'] > row['MACD_Signal'] and 
-            abs(row['MAD'] - row['MACD_Signal']) > abs(row['MACD_prev'] - row['MACD_Signal_prev'])):
+            abs(row['MACD'] - row['MACD_Signal']) > abs(row['MACD_prev'] - row['MACD_Signal_prev'])):
             return 1
     return 0
 
@@ -687,10 +755,10 @@ def price_rejects_breakdown_from_key_support(row):
     return 0
 
 def price_retests_prior_breakout_zone(row):
-    if (pd.notna(row['Close']) and pd.notna(row['BreakoutZone']) and 
-            row['BreakoutZone'] != 0 and 
-            abs(row['Close'] - row['BreakoutZone']) / row['BreakoutZone'] < 0.01 and 
-            row['Close'] > row['BreakoutZone']):
+    if (pd.notna(row['Close']) and pd.notna(row['Breakout_Occurred']) and 
+            row['Breakout_Occurred'] != 0 and 
+            abs(row['Close'] - row['Breakout_Occurred']) / row['Breakout_Occurred'] < 0.01 and 
+            row['Close'] > row['Breakout_Occurred']):
             return 1
     return 0
 
@@ -789,12 +857,46 @@ def fib_retracement_after_parabolic_move(row):
             return 1
     return 0
 
-def buy_at_golden_pocket_zone(row):
-    if (pd.notna(row['Close']) and pd.notna(row['Fib_618']) and pd.notna(row['Fib_65']) and 
-            row['Fib_618'] <= row['Close'] <= row['Fib_65'] and 
-            row['Close'] > row['Close_prev']):  # Bullish confirmation
-            return 1
-    return 0
+def buy_at_golden_pocket_zone(row, 
+                            rsi_threshold=40, 
+                            volume_multiplier=1.2, 
+                            candle_confirmation=True):
+    """
+    Enhanced Golden Pocket Zone strategy with:
+    - Price between 61.8% and 65% Fib levels (Golden Pocket)
+    - Bullish price momentum
+    - RSI confirmation
+    - Volume confirmation
+    - Optional candle pattern confirmation
+    
+    Parameters:
+        rsi_threshold: Minimum RSI value (default 40)
+        volume_multiplier: Volume spike requirement (default 1.2x avg)
+        candle_confirmation: Require bullish candle (default True)
+    """
+    # Check required values exist
+    required_cols = ['Close', 'Fib_618', 'Fib_65', 'Close_prev', 'RSI', 'Volume', 'Volume_MA']
+    if not all(col in row and pd.notna(row[col]) for col in required_cols):
+        return 0
+    
+    # Golden Pocket Zone condition
+    in_golden_pocket = (row['Fib_618'] <= row['Close'] <= row['Fib_65'])
+    
+    # Momentum confirmation
+    price_momentum = (row['Close'] > row['Close_prev'])
+    
+    # Indicator confirmations
+    rsi_confirm = (row['RSI'] > rsi_threshold)
+    volume_confirm = (row['Volume'] > volume_multiplier * row['Volume_MA'])
+    
+    # Optional candle confirmation
+    candle_confirm = (not candle_confirmation) or (row['Close'] > row['Open'])
+    
+    # MACD bullish crossover (optional)
+    macd_confirm = ('MACD' not in row) or ('MACD_Signal' not in row) or (row['MACD'] > row['MACD_Signal'])
+    
+    return 1 if (in_golden_pocket and price_momentum and rsi_confirm 
+                and volume_confirm and candle_confirm and macd_confirm) else 0
 
 ######################## Define indicators & oscillators-based strategy functions #######################
 def stochastic_rsi_oversold_cross_up(row):
@@ -814,12 +916,16 @@ def stochastic_rsi_oversold_cross_up(row):
     oversold_threshold = 20
     rsi_confirmation = 30
     
-    current_k = row['StochRSI_K']
-    current_d = row['StochRSI_D']
-    prev_k = row['StochRSI_prev']  # Make sure you have this column from shift(1)
+    current_k = float(row.get('StochRSI_K', 50))
+    current_d = float(row.get('StochRSI_D', 50))
+    prev_k = float(row.get('StochRSI_prev', 50))  # Make sure you have this column from shift(1)
+    
+    # Check if we have valid numerical values
+    if None in (prev_k, current_k, current_d):
+        return 0
     
     # Current RSI for confirmation (optional)
-    current_rsi = row.get('RSI', 100)  # Default to 100 if RSI not calculated
+    current_rsi = float(row.get('RSI', 100))  # Default to 100 if RSI not calculated
     
     # Strategy conditions
     condition1 = prev_k < oversold_threshold  # Was in oversold
