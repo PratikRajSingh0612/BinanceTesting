@@ -191,6 +191,8 @@ def allstrategiesv2(df):
     strategy_names = list(strategy_mapping.keys())
     df['ScoreAll'] = df[strategy_names].fillna(0).sum(axis=1)
 
+
+    df2 = df.iloc[[-1]].copy()
     return df
 
 ####################### Define Moving Average Strategy #######################
