@@ -158,7 +158,8 @@ def detect_bearish_trendlines(df, lookback=20, min_touches=3, tolerance=0.01):
 
 
 def create_variables(df, symbol, client, BackTime):
-        # ===== 1. Basic Price Transformations =====
+    
+    # ===== 1. Basic Price Transformations =====
     df['Close_prev'] = df['Close'].shift(1)
     df['Open_prev'] = df['Open'].shift(1)
     df['High_prev'] = df['High'].shift(1)
@@ -243,7 +244,7 @@ def create_variables(df, symbol, client, BackTime):
                     [f'Trix_prev_{i}' for i in range(1, 3 + 1)]
     for col in cols_to_fill:
         df[col].fillna(0, inplace=True)
-    df['Trix_above_zero'].fillna(False, inplace=True)
+    df['Trix_above_zero'] = df['Trix_above_zero'].fillna(False, inplace=True)
 
     # Multi-period lookbacks
     for i in range(2, 6):
@@ -739,3 +740,39 @@ def create_variablesV2(df, symbol, client, BackTime):
     df = detect_bearish_trendlines(df, lookback=20, min_touches=3)
 
     return df
+
+def CreateVars_AllPairs(pairs, df, client, BackTime):
+    """
+    Run create_variablesV2 in parallel for a list of trading pairs.
+    
+    Parameters:
+    - pairs: List of trading pairs (e.g., ['BTCUSDT', 'ETHUSDT']).
+    - df: Input DataFrame, assumed to contain data for all pairs (filtered by symbol).
+    - client: Binance API client (e.g., from python-binance).
+    - BackTime: Lookback period for create_variablesV2 (e.g., timestamp, '24h').
+    
+    Returns:
+    - pandas DataFrame combining results from all pairs.
+    """
+    results = []
+    
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        # Submit tasks for each pair
+        futures = [
+            executor.submit(create_variables, df[df['Symbol'] == symbol] if 'Symbol' in df.columns else df, symbol, client, BackTime)
+            for symbol in pairs
+        ]
+        # Process completed tasks
+        for future in as_completed(futures):
+            try:
+                result_df = future.result()
+                if result_df is not None and not result_df.empty:
+                    results.append(result_df)
+            except Exception as e:
+                symbol = pairs[futures.index(future)]  # Approximate symbol
+                print(f"Error processing {symbol}: {e}")
+    
+    # Combine results into a single DataFrame
+    if results:
+        final_df = pd.concat(results, ignore_index=True)
+        return final_df
