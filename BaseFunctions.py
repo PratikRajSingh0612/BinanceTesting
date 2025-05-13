@@ -104,7 +104,7 @@ def get_candles_data(symbol, interval, limit, backtime, client):
     # Convert to DataFrame
     df = pd.DataFrame(candles, columns=[
         'Open Time', 'Open', 'High', 'Low', 'Close', 'Volume',
-        'Close Time', 'Quote Asset Volume', 'Number of Trades',
+        'Close Time', 'Quote Volume', 'Number of Trades',
         'Taker buy base asset volume', 'Taker buy quote asset volume', 'Ignore'
     ])
     
@@ -112,7 +112,7 @@ def get_candles_data(symbol, interval, limit, backtime, client):
     df['Open Time'] = pd.to_datetime(df['Open Time'], unit='ms')
     df['Close Time'] = pd.to_datetime(df['Close Time'], unit='ms')
 
-    columns_to_convert = ['Open', 'High', 'Low', 'Close', 'Volume', 'Quote Asset Volume', 'Taker buy base asset volume', 'Taker buy quote asset volume']
+    columns_to_convert = ['Open', 'High', 'Low', 'Close', 'Volume', 'Quote Volume', 'Taker buy base asset volume', 'Taker buy quote asset volume']
     df[columns_to_convert] = df[columns_to_convert].astype('float64')
 
     df['Symbol'] = symbol
@@ -149,12 +149,13 @@ def get_CandlesData_AllPairs(pairs, client, interval, endTime, limit):
                 for kline in klines:
                     candles_data.append({
                         'Symbol': symbol,
-                        'Timestamp': pd.to_datetime(kline[0], unit='ms'),  # Convert timestamp to datetime
+                        'Open Time': pd.to_datetime(kline[0], unit='ms'),  # Convert timestamp to datetime
                         'Open': float(kline[1]),
                         'High': float(kline[2]),
                         'Low': float(kline[3]),
                         'Close': float(kline[4]),
                         'Volume': float(kline[5]),
+                        'Close Time': pd.to_datetime(kline[6], unit='ms'),  # Convert timestamp to datetime
                         'Quote Volume': float(kline[7]),  # Quote asset volume
                         'Taker buy base asset volume': float(kline[8]),  # Taker buy base asset volume - Taker buy base asset volume" measures how much of the asset was bought by takers
                         'Taker buy quote asset volume': float(kline[9])  # Taker buy quote asset volume - Taker buy quote asset volume" measures the equivalent amount in the quote currency spent to make those buys

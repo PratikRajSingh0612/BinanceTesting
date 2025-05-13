@@ -70,7 +70,7 @@ def rsi_multi_timeframe_convergence(row):
 
 def add_fibonacci_support(df, lookback_periods):
     try:
-        if 'Time' not in df.columns or 'High' not in df.columns or 'Low' not in df.columns:
+        if 'High' not in df.columns or 'Low' not in df.columns:
             print("Error: Required columns missing in DataFrame")
             df['Fib_Support'] = 0
             return df
@@ -155,6 +155,15 @@ def detect_bearish_trendlines(df, lookback=20, min_touches=3, tolerance=0.01):
     df['Trendline_Slope'].fillna(0, inplace=True)
 
     return df
+
+def calculate_atr(df, period):
+    df['Previous_Close'] = df['Close'].shift(1)
+    df['High_Low'] = df['High'] - df['Low']
+    df['High_PrevClose'] = abs(df['High'] - df['Previous_Close'])
+    df['Low_PrevClose'] = abs(df['Low'] - df['Previous_Close'])
+    df['True_Range'] = df[['High_Low', 'High_PrevClose', 'Low_PrevClose']].max(axis=1)
+    atr = df['True_Range'].rolling(window=period).mean()
+    return atr
 
 
 def create_variables(df, symbol, client, BackTime):
@@ -315,10 +324,10 @@ def create_variables(df, symbol, client, BackTime):
     df['RSI_1D'] = df['RSI_1D'].fillna(method='ffill')
 
     # MACD
-    macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
-    df['MACD'] = macd['MACD_12_26_9']
-    df['MACD_Signal'] = macd['MACDs_12_26_9']
-    df['MACD_Histogram'] = macd['MACDh_12_26_9']
+    macd = MACD(df['Close'], window_fast=12, window_slow=26, window_sign=9)
+    df['MACD'] = macd.macd()
+    df['MACD_Signal'] = macd.macd_signal()
+    df['MACD_Histogram'] = macd.macd_diff()
     df['MACD_prev'] = df['MACD'].shift(1)
     df['MACD_Signal_prev'] = df['MACD_Signal'].shift(1)
     df['MACD_Histogram_prev'] = df['MACD_Histogram'].shift(1)
@@ -493,254 +502,14 @@ def create_variables(df, symbol, client, BackTime):
     df['Range_High_prev'] = df['Range_High'].shift(lookback)
     df['Range_Low_prev'] = df['Range_Low'].shift(lookback)
 
-    return df
+    # Calculate ATR
+    df['ATR'] = calculate_atr(df, 14)
+
+    df = df.iloc[-1:]
+
+    return pd.DataFrame(df)
 
     
-def create_variablesV2(df, symbol, client, BackTime):
-        # ===== Integers =====
-    # --- General Parameters ---
-    period = 20
-    lookback_period = 20
-    volume_multiplier = 1.5
-    consolidation_period = 10
-    lookback = 20
-    vol_thresh = 1.5
-
-    # ===== Lists =====
-    # --- Moving Averages ---
-    ma_periods = [10, 20, 50, 200]
-
-    # ===== External DataFrames =====
-    # --- Higher Timeframe Indicators ---
-    candles_4h = get_candles_data(symbol, '4h', 1000, BackTime, client)
-    candles_1d = get_candles_data(symbol, '1d', 1000, BackTime, client)
-
-    # ===== DataFrame Columns =====
-    # --- Price Transformations ---
-    df['Close_prev'] = df['Close'].shift(1)
-    df['Open_prev'] = df['Open'].shift(1)
-    df['High_prev'] = df['High'].shift(1)
-    df['Low_prev'] = df['Low'].shift(1)
-    df['Volume_prev'] = df['Volume'].shift(1)
-    df['Typical_price'] = (df['High'] + df['Low'] + df['Close']) / 3
-    df['TD'] = ((df['Typical_price'] > df['Typical_price'].shift(1)) * 2 - 1)
-    for i in range(2, 6):
-        df[f'Close_prev{i}'] = df['Close'].shift(i)
-        df[f'Open_prev{i}'] = df['Open'].shift(i)
-        df[f'High_prev{i}'] = df['High'].shift(i)
-        df[f'Low_prev{i}'] = df['Low'].shift(i)
-        df[f'Volume_prev{i}'] = df['Volume'].shift(i)
-
-    # --- Money Flow Indicators ---
-    df['MFM'] = ((df['Close'] - df['Low']) - (df['High'] - df['Close'])) / (df['High'] - df['Low'])
-    df['MFV'] = df['MFM'] * df['Volume']
-    df['CMF'] = df['MFV'].rolling(window=period).sum() / df['Volume'].rolling(window=period).sum()
-    df['CMF_prev'] = df['CMF'].shift(1)
-    df['money_flow'] = df['Typical_price'] * df['Volume']
-    df['positive_flow'] = (df['Typical_price'] > df['Typical_price'].shift(1)) * df['money_flow']
-    df['negative_flow'] = (df['Typical_price'] < df['Typical_price'].shift(1)) * df['money_flow']
-    df['positive_sum'] = df['positive_flow'].rolling(period).sum()
-    df['negative_sum'] = df['negative_flow'].rolling(period).sum()
-    df['money_ratio'] = df['positive_sum'] / df['negative_sum']
-    df['MFI'] = 100 - (100 / (1 + df['money_ratio']))
-    df['MFI_prev'] = df['MFI'].shift(1)
-
-    # --- Moving Averages ---
-    df['SMA_Typical_price'] = df['Typical_price'].rolling(window=period).mean()
-    df['Mean_Deviation'] = df['Typical_price'].rolling(window=period).apply(
-        lambda x: np.mean(np.abs(x - np.mean(x))), raw=True
-    )
-    for period in ma_periods:
-        df[f'MA_{period}'] = df['Close'].rolling(period).mean()
-        df[f'EMA_{period}'] = ta.ema(df['Close'], length=period)
-        df[f'MA_{period}_prev'] = df[f'MA_{period}'].shift(1)
-        df[f'EMA_{period}_prev'] = df[f'EMA_{period}'].shift(1)
-        df[f'EMA_{period}_HTF'] = df['Close'].ewm(span=period).mean()
-        df[f'EMA_{period}_HTF_prev'] = df[f'EMA_{period}_HTF'].shift(1)
-    df['MA_50_slope'] = df['MA_50'].diff(5) / 5
-    df['MA_50_slope_prev'] = df['MA_50_slope'].shift(1)
-
-    # --- Volume Indicators ---
-    df['Volume_20_SMA'] = df['Volume'].rolling(period).mean()
-    df['OBV'] = ta.obv(df['Close'], df['Volume'])
-    df['OBV_prev'] = df['OBV'].shift(1)
-    df['VF'] = df['TD'] * df['Volume'] * (2 * (df['Close'] - df['Low'] - (df['High'] - df['Close'])) / (df['High'] - df['Low']))
-    df['Short_EMA'] = df['VF'].ewm(span=34, adjust=False).mean()
-    df['Long_EMA'] = df['VF'].ewm(span=55, adjust=False).mean()
-    df['KVO'] = df['Short_EMA'] - df['Long_EMA']
-    df['KVO_Signal'] = df['KVO'].ewm(span=13, adjust=False).mean()
-    df['KVO_prev'] = df['KVO'].shift(1)
-    df['KVO_Signal_prev'] = df['KVO_Signal'].shift(1)
-
-    # --- Oscillators ---
-    df['CCI'] = (df['Typical_price'] - df['SMA_Typical_price']) / (0.015 * df['Mean_Deviation'])
-    df['CCI_prev'] = df['CCI'].shift(1).fillna(0)
-    trix_data = ta.trix(df['Close'], length=15)
-    df['Trix'] = trix_data.iloc[:, 0] if isinstance(trix_data, pd.DataFrame) else trix_data
-    if isinstance(trix_data, pd.DataFrame) and trix_data.shape[1] > 1:
-        df['Trix_signal'] = trix_data.iloc[:, 1]
-    df['Trix_prev'] = df['Trix'].shift(1)
-    for i in range(1, 4):
-        df[f'Trix_prev_{i}'] = df['Trix'].shift(i)
-    df['Trix_above_zero'] = True
-    for i in range(1, 4):
-        df['Trix_above_zero'] = (df['Trix_above_zero'] & (df[f'Trix_prev_{i}'] > 0))
-    df['RSI'] = ta.rsi(df['Close'], length=14)
-    df['RSI_prev'] = df['RSI'].shift(1)
-    df['RSI_prev2'] = df['RSI'].shift(2)
-    df['RSI_Trendline'] = df['RSI'].rolling(window=5).mean()
-    macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
-    df['MACD'] = macd['MACD_12_26_9']
-    df['MACD_Signal'] = macd['MACDs_12_26_9']
-    df['MACD_Histogram'] = macd['MACDh_12_26_9']
-    df['MACD_prev'] = df['MACD'].shift(1)
-    df['MACD_Signal_prev'] = df['MACD_Signal'].shift(1)
-    df['MACD_Histogram_prev'] = df['MACD_Histogram'].shift(1)
-    stoch_rsi = ta.stochrsi(close=df['Close'], window=14, smooth_window=14, smooth_k=3, smooth_d=3)
-    df['StochRSI_K'] = stoch_rsi['STOCHRSIk_14_14_3_3']
-    df['StochRSI_D'] = stoch_rsi['STOCHRSId_14_14_3_3']
-    df['StochRSI_prev'] = df['StochRSI_K'].shift(1)
-
-    # --- Trend Indicators ---
-    adx = ta.adx(df['High'], df['Low'], df['Close'], length=14)
-    df['ADX'] = adx['ADX_14']
-    df['DMI+'] = adx['DMP_14']
-    df['DMI-'] = adx['DMN_14']
-    df['DMI+_prev'] = df['DMI+'].shift(1)
-    df['DMI-_prev'] = df['DMI-'].shift(1)
-    df['AroonUp'] = df['High'].rolling(window=period + 1).apply(lambda x: float(x.argmax()) / period * 100, raw=True)
-    df['AroonDown'] = df['Low'].rolling(window=period + 1).apply(lambda x: float(x.argmin()) / period * 100, raw=True)
-    df['AroonUp_prev'] = df['AroonUp'].shift(1)
-    df['AroonDown_prev'] = df['AroonDown'].shift(1)
-
-    # --- Support/Resistance ---
-    df['Support'] = df['Low'].rolling(period).min()
-    df['Resistance'] = df['High'].rolling(period).max()
-    df['Swing_High'] = df['High'].rolling(50).max()
-    df['Swing_Low'] = df['Low'].rolling(50).min()
-    df['Support_Tests'] = df['Low'].rolling(period).apply(lambda x: (x == x.min()).sum())
-    df['Is_Swing_High'] = (df['High'] == df['High'].rolling(window=5, center=True, min_periods=1).max())
-    df['WilliamsR'] = (df['Resistance'] - df['Close']) / (df['Resistance'] - df['Support']) * -100
-    df['WilliamsR_prev'] = df['WilliamsR'].shift(1)
-
-    # ===== Temporary Variables =====
-    # --- Support/Resistance ---
-    recent_high = df['High'].rolling(period).max()
-    recent_low = df['Low'].rolling(period).min()
-
-    # --- DataFrame Columns (Continued) ---
-    # --- Fibonacci Levels ---
-    df['Fib_Fan_Support1'] = recent_high - (recent_high - recent_low) * 0.382
-    df['Fib_Fan_Support2'] = recent_high - (recent_high - recent_low) * 0.5
-    df['Fib_Fan_Support3'] = recent_high - (recent_high - recent_low) * 0.618
-    df['Fib_Fan_Support4'] = recent_high - (recent_high - recent_low) * 0.65
-
-    # ===== Temporary Variables (Continued) =====
-    # --- Support/Resistance ---
-    supports = df[['Fib_Fan_Support1', 'Fib_Fan_Support2', 'Fib_Fan_Support3']]
-    swing_highs = df['High'].where(df['Is_Swing_High']).ffill()
-    vol_condition = df['Volume'] > vol_thresh * df['Volume_20_SMA']
-
-    # --- DataFrame Columns (Continued) ---
-    # --- Fibonacci Levels ---
-    df['Fib_Fan_Support'] = supports.where(supports.lt(df['Close']), np.nan).max(axis=1)
-    df['Fib_382'] = df['Close'] * 0.382
-    df['Fib_50'] = df['Close'] * 0.5
-    df['Fib_618'] = df['Close'] * 0.618
-    df['Fib_786'] = df['Close'] * 0.786
-    df['Fib_Extension_1'] = df['Close'] * 1.618
-    df['Fib_Extension_2'] = df['Close'] * 2.618
-
-    # --- Support/Resistance ---
-    df['Prior_Resistance'] = df['High'].rolling(lookback_period).max()
-    df['Breakout_Occurred'] = (df['Close'] > df['Prior_Resistance']).astype(int)
-    df['Potential_Support_Zone'] = df['Prior_Resistance'].where(df['Breakout_Occurred'] == 1)
-    df['Volume_Spike'] = (df['Volume'] > volume_multiplier * df['Volume_20_SMA']).astype(int)
-    df['Candle_Rejection'] = ((df['Close'] - df['Low']) / (df['High'] - df['Low']) > 0.67).astype(int)
-    df['Breakout'] = np.where((df['Close'] > swing_highs) & vol_condition, swing_highs, 0)
-    df['BreakoutZone'] = df['Breakout'].replace(0, method='ffill')
-    df['BreakoutZone'] = df['BreakoutZone'].where(df['Close'] > df['BreakoutZone'], 0)
-
-    # ===== Temporary Variables (Continued) =====
-    # --- Support/Resistance ---
-    conditions = (
-        (df['Close'] <= df['Potential_Support_Zone'] * 1.01) &
-        (df['Close'] >= df['Potential_Support_Zone'] * 0.99) &
-        (df['Volume_Spike'] == 1) &
-        (df['Candle_Rejection'] == 1) &
-        (df['Close'] > df['Open'])
-    )
-
-    # --- DataFrame Columns (Continued) ---
-    # --- Support/Resistance ---
-    df['Volume_Support_Signal'] = np.where(conditions, 1, 0)
-
-    # --- Candlestick Features ---
-    df['Candle_Body'] = abs(df['Close'] - df['Open'])
-    df['Upper_Wick'] = df['High'] - df[['Close','Open']].max(axis=1)
-    df['Lower_Wick'] = df[['Close','Open']].min(axis=1) - df['Low']
-    df['Is_Bullish'] = (df['Close'] > df['Open']).astype(int)
-    df['Is_Bearish'] = (df['Close'] < df['Open']).astype(int)
-    df['Is_Doji'] = (df['Candle_Body'] < 0.001 * df['Close']).astype(int)
-
-    # --- Channel Indicators ---
-    df['Channel_High'] = df['High'].rolling(period).max()
-    df['Channel_Low'] = df['Low'].rolling(period).min()
-    df['Channel_Midline'] = (df['Channel_High'] + df['Channel_Low']) / 2
-    df['Channel_Width'] = df['Channel_High'] - df['Channel_Low']
-    df['Channel_Midline_prev'] = df['Channel_Midline'].shift(1)
-    df['Channel_High_prev'] = df['Channel_High'].shift(1)
-    df['Channel_Low_prev'] = df['Channel_Low'].shift(1)
-    df['Range_High'] = df['High'].rolling(consolidation_period).max()
-    df['Range_Low'] = df['Low'].rolling(consolidation_period).min()
-    df['Range_Midpoint'] = (df['Range_High'] + df['Range_Low']) / 2
-    df['Range_Width'] = df['Range_High'] - df['Range_Low']
-    df['Range_High_prev'] = df['Range_High'].shift(lookback)
-    df['Range_Low_prev'] = df['Range_Low'].shift(lookback)
-
-    # --- Higher Timeframe Indicators ---
-    candles_4h['RSI_4H'] = RSIIndicator(candles_4h['Close'], window=14).rsi()
-    macd_4h = MACD(candles_4h['Close'], window_fast=12, window_slow=26, window_sign=9)
-    candles_4h['MACD_4H'] = macd_4h.macd()
-    candles_4h['MACD_Signal_4H'] = macd_4h.macd_signal()
-    candles_4h['High_4H'] = candles_4h['High']
-    candles_4h['High_4H_prev'] = candles_4h['High'].shift(1)
-    candles_4h['Low_4H'] = candles_4h['Low']
-    candles_4h['Low_4H_prev'] = candles_4h['Low'].shift(1)
-    candles_1d['RSI_1D'] = RSIIndicator(candles_1d['Close'], window=14).rsi()
-    macd_1d = MACD(candles_1d['Close'], window_fast=12, window_slow=26, window_sign=9)
-    candles_1d['MACD_1D'] = macd_1d.macd()
-    candles_1d['MACD_Signal_1D'] = macd_1d.macd_signal()
-    candles_1d['High_1D'] = candles_1d['High']
-    candles_1d['High_1D_prev'] = candles_1d['High'].shift(1)
-    candles_1d['Low_1D'] = candles_1d['Low']
-    candles_1d['Low_1D_prev'] = candles_1d['Low'].shift(1)
-    df = df.merge(candles_4h[['Close Time', 'RSI_4H', 'MACD_4H', 'MACD_Signal_4H', 'High_4H', 'High_4H_prev', 'Low_4H', 'Low_4H_prev']], on='Close Time', how='left')
-    df = df.merge(candles_1d[['Close Time', 'RSI_1D', 'MACD_1D', 'MACD_Signal_1D', 'High_1D', 'High_1D_prev', 'Low_1D', 'Low_1D_prev']], on='Close Time', how='left')
-
-    # ===== Fill NA Values =====
-    cols_to_fill = ['Trix', 'Trix_prev'] + [f'Trix_prev_{i}' for i in range(1, 4)]
-    for col in cols_to_fill:
-        df[col].fillna(0, inplace=True)
-    df['Trix_above_zero'].fillna(False, inplace=True)
-    df['MFI'].fillna(50, inplace=True)
-    df['MFI_prev'].fillna(50, inplace=True)
-    for col in ['RSI_4H', 'RSI_1D', 'MACD_4H', 'MACD_Signal_4H', 'MACD_1D', 'MACD_Signal_1D']:
-        df[col] = df[col].fillna(method='ffill').fillna(0)
-    df['RSI_4H'] = df['RSI_4H'].fillna(method='ffill')
-    df['RSI_1D'] = df['RSI_1D'].fillna(method='ffill')
-    cols = ['Channel_High', 'Channel_Low', 'Channel_Midline', 'Channel_Width',
-            'Channel_Midline_prev', 'Channel_High_prev', 'Channel_Low_prev']
-    for col in cols:
-        df[col].fillna(method='bfill', inplace=True)
-
-    # ===== External Function Calls =====
-    df = calculate_fib_cluster(df)
-    df = add_fibonacci_support(df, 50)
-    df = detect_bearish_trendlines(df, lookback=20, min_touches=3)
-
-    return df
-
 def CreateVars_AllPairs(pairs, df, client, BackTime):
     """
     Run create_variablesV2 in parallel for a list of trading pairs.
@@ -773,6 +542,25 @@ def CreateVars_AllPairs(pairs, df, client, BackTime):
                 print(f"Error processing {symbol}: {e}")
     
     # Combine results into a single DataFrame
+    if results:
+        final_df = pd.concat(results, ignore_index=True)
+        return final_df
+    
+
+def CreateVars_AllPairsv2(pairs, df, client, BackTime):
+    """
+    Run create_variablesV2 sequentially for a list of trading pairs with a progress bar.
+    """
+    results = []
+    for symbol in tqdm(pairs, desc='Processing pairs'):
+        # Filter df for the current symbol if 'Symbol' column exists
+        print(f"Processing {symbol}")
+        df_symbol = df if 'Symbol' not in df.columns else df[df['Symbol'] == symbol]
+        result_df = create_variables(df_symbol, symbol, client, BackTime)
+        if result_df is not None and not result_df.empty:
+            results.append(result_df)
+    
+    # Concatenate results
     if results:
         final_df = pd.concat(results, ignore_index=True)
         return final_df
